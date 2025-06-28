@@ -1,0 +1,6 @@
+lspc_dataset
+qwen3_lora_prodcat
+*.zip
+*.tsv
+*.gz
+*.json
