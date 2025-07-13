@@ -6,11 +6,38 @@ authors = [
     {name = "ivan.aufkl@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-]
 
+[tool.poetry]
+package-mode = false
+name = "semantic-model"
+version = "0.1.0"
+description = ""
+authors = ["ivan.aufkl@gmail.com"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.12"
+datasets = "^2.19.0"
+transformers = "^4.53.0"
+peft = "^0.11.1"
+scikit-learn = "^1.5.0"
+torch       = { version = "2.7.1+cu128", source = "pytorch-cu128" }
+torchvision = { version = "0.22.1+cu128", source = "pytorch-cu128" }
+torchaudio  = { version = "2.7.1+cu128", source = "pytorch-cu128" } 
+accelerate = "^1.8.1"
+bitsandbytes = "^0.45.3" 
+tqdm = "^4.66.4"
+numpy = "<2.0"
+prodigyopt = "^1.0"
+setuptools = "*"
+importlib-metadata = "^8.7.0"
+tokenizers = "^0.21.2"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name     = "pytorch-cu128"
+url      = "https://download.pytorch.org/whl/cu128"
+priority = "explicit"   

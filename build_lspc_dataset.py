@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--zip",       type=pathlib.Path, default="lspcV2020.zip",
                    help="Path to lspcV2020.zip")
-    p.add_argument("--map",       type=pathlib.Path, default="PDC2020_majority_map.tsv",
+    p.add_argument("--map",       type=pathlib.Path, default="PDC2020_map.tsv",
                    help="Path to PDC2020_map.tsv (cluster_id<TAB>category)")
     p.add_argument("--out",       type=pathlib.Path, default="lspc_dataset",
                    help="Output directory for saved DatasetDict")

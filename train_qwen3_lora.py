@@ -24,9 +24,12 @@ from transformers import (
     AutoModelForSequenceClassification,
     TrainingArguments,
     Trainer,
+    DataCollatorWithPadding,
+    EarlyStoppingCallback,
 )
 from peft import LoraConfig, get_peft_model, TaskType
-from sklearn.metrics import f1_score, accuracy_score
+from sklearn.metrics import f1_score, accuracy_score, confusion_matrix
+import numpy as np
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -73,15 +76,20 @@ ap.add_argument("--out",   default="./qwen3_lora_prodcat",
                 help="Output checkpoint directory")
 ap.add_argument("--model", default="Qwen/Qwen3-Embedding-0.6B",
                 help="Base model repo or path")
-ap.add_argument("--batch",  type=int, default=128,
+ap.add_argument("--batch",  type=int, default=32,
                 help="Effective (logical) batch size")
-ap.add_argument("--epochs", type=int, default=2)
-ap.add_argument("--lr",     type=float, default=2e-4,
+ap.add_argument("--epochs", type=int, default=1)
+ap.add_argument("--lr",     type=float, default=5e-5,
                 help="LoRA learning rate")
 ap.add_argument("--lora_r",     type=int, default=16)
 ap.add_argument("--lora_alpha", type=int, default=32)
 ap.add_argument("--seq_len",    type=int, default=256,
                 help="Max sequence length")
+ap.add_argument("--balance_to_min_class", action="store_true",
+                help="Downsample training set to the size of the smallest class")
+ap.add_argument("--max_samples_per_class", type=int, default=None,
+                help="Downsample training set to this many samples per class. "
+                     "Overrides --balance_to_min_class.")
 args = ap.parse_args()
 
 
@@ -113,27 +121,69 @@ micro_batch, grad_accum = adjust_micro_batch(args.batch, device)
 # Dataset
 # ────────────────────────────────────────────────────────────────────────────────
 ds: DatasetDict = load_from_disk(args.data)          # expects train/valid/test
+
+# Balanced (down)sampling of training set
+sample_size = args.max_samples_per_class
+if not sample_size and args.balance_to_min_class:
+    from collections import Counter
+    print("⚖️  Balancing training set to smallest class size...")
+    counts = Counter(ds["train"]["label"])
+    sample_size = min(counts.values())
+    print(f"   Smallest class has {sample_size} samples.")
+
+if sample_size:
+    print(f"   Downsampling to {sample_size} samples per class...")
+    train_ds = ds["train"]
+
+    # Group indices by class & shuffle them
+    indices_by_label = {}
+    torch.manual_seed(42)
+    for i, label in enumerate(train_ds["label"]):
+        if label not in indices_by_label:
+            indices_by_label[label] = []
+        indices_by_label[label].append(i)
+    for label in indices_by_label:
+        perm = torch.randperm(len(indices_by_label[label]))
+        indices_by_label[label] = [indices_by_label[label][i] for i in perm]
+
+    # Sample indices from each class
+    balanced_indices = []
+    for label, indices in indices_by_label.items():
+        sampled_indices = indices[:sample_size]
+        balanced_indices.extend(sampled_indices)
+
+    # Create the new balanced dataset from the selected indices
+    ds["train"] = train_ds.select(balanced_indices)
+    print(f"   New training set size: {len(ds['train'])}")
+
+
 labels     = sorted({l for l in ds["train"]["label"]})
 label2id   = {l: i for i, l in enumerate(labels)}
 id2label   = {i: l for l, i in label2id.items()}
 
 tok = AutoTokenizer.from_pretrained(
     args.model,
-    token="hf_your_token_if_needed",
+    token="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",
     trust_remote_code=True,
 )
 if tok.pad_token_id is None:                         # Qwen3 has no pad by default
     tok.pad_token = tok.eos_token or "<|pad|>"
 tok.padding_side = "right"
 
-def preprocess(batch):
-    enc = tok(batch["text"],
-              truncation=True,
-              padding="max_length",
-              max_length=args.seq_len)
-    enc["labels"] = [label2id[l] for l in batch["label"]]
-    return enc
+# Pre‑process: tokenize text, map labels to IDs
+# Note: we don't need to one‑hot encode, HF handles that
+def preprocess(batch: dict) -> dict:
+    # The tokenizer will return input_ids, attention_mask, etc.
+    tokenized = tok(
+        batch["text"],
+        max_length=args.seq_len,
+        padding="max_length",
+        truncation=True,
+    )
+    tokenized["label"] = batch["label"]
+    return tokenized
 
+# The `map` function is lazy, so this is fast
 ds_tok = ds.map(preprocess, batched=True,
                 remove_columns=ds["train"].column_names)
 
@@ -157,7 +207,7 @@ if is_cuda and importlib.util.find_spec("bitsandbytes"):
 # ────────────────────────────────────────────────────────────────────────────────
 model = AutoModelForSequenceClassification.from_pretrained(
     args.model,
-    token="hf_your_token_if_needed",
+    token="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",
     num_labels=len(labels),
     device_map="auto" if is_cuda else None,
     torch_dtype=dtype,
@@ -192,19 +242,18 @@ lora_cfg = LoraConfig(
     lora_alpha=args.lora_alpha,
     target_modules=target_modules,
     modules_to_save=MODULES_TO_SAVE,
-    lora_dropout=0.1,
+    lora_dropout=0.2,
     bias="none",
     task_type=TaskType.SEQ_CLS,
 )
 model = get_peft_model(model, lora_cfg)
+# Print stats
 model.print_trainable_parameters()
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Metrics
-# ────────────────────────────────────────────────────────────────────────────────
-def compute_metrics(pred):
-    logits, labels = pred
+# Metrics: macro F1
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
     preds = logits.argmax(axis=-1)
     return {
         "macro_f1": f1_score(labels, preds, average="macro"),
@@ -216,51 +265,79 @@ def compute_metrics(pred):
 # ────────────────────────────────────────────────────────────────────────────────
 # TrainingArguments
 # ────────────────────────────────────────────────────────────────────────────────
-ta_params = dict(
+training_args = TrainingArguments(
     output_dir=args.out,
+    # Training strategy
+    num_train_epochs=args.epochs,
     per_device_train_batch_size=micro_batch,
     per_device_eval_batch_size=micro_batch,
+    gradient_accumulation_steps=grad_accum,
+    # Dtype
+    fp16=False,
+    bf16=False,
+    # Optimisation
+    optim="paged_adamw_8bit" if is_cuda else "adamw_torch",
     learning_rate=args.lr,
-    num_train_epochs=args.epochs,
+    lr_scheduler_type="cosine",
+    warmup_steps=100,
+    weight_decay=0.01,
+    max_grad_norm=1.0,
     logging_steps=50,
     save_strategy="epoch",
-    metric_for_best_model="eval_macro_f1",
+    eval_strategy="epoch",
     load_best_model_at_end=True,
-    fp16=is_cuda,          # FP16 only on CUDA
-    bf16=False,
-    gradient_checkpointing=not is_mps,  # skip on MPS – avoids warnings
-    gradient_accumulation_steps=grad_accum,
+    metric_for_best_model="macro_f1",
+    gradient_checkpointing=True,
     report_to="none",
     seed=42,
-    optim="adamw_torch",              # never auto‑switch to bnb 8‑bit optim
 )
 
-key = "evaluation_strategy"
-if key in inspect.signature(TrainingArguments.__init__).parameters:
-    ta_params[key] = "epoch"
-else:
-    ta_params["eval_strategy"] = "epoch"
-
-args_tr = TrainingArguments(**ta_params)
-
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Trainer
+# Run training
 # ────────────────────────────────────────────────────────────────────────────────
+data_collator = DataCollatorWithPadding(tokenizer=tok)
+
 trainer = Trainer(
     model=model,
-    args=args_tr,
+    args=training_args,
     train_dataset=ds_tok["train"],
     eval_dataset=ds_tok["validation"],
-    tokenizer=tok,
     compute_metrics=compute_metrics,
+    data_collator=data_collator,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
 )
 
 trainer.train()
+
+# Save final model
 val_metrics = trainer.evaluate(ds_tok["validation"])
 print("Validation:", val_metrics)
 test_metrics = trainer.evaluate(ds_tok["test"])
 print("Test:", test_metrics)
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Confusion Matrix
+# ────────────────────────────────────────────────────────────────────────────────
+print("\nCalculating Confusion Matrix for Test Set...")
+predictions = trainer.predict(ds_tok["test"])
+y_pred = np.argmax(predictions.predictions, axis=1)
+y_true = predictions.label_ids
+cm = confusion_matrix(y_true, y_pred)
+
+# Get class names for plotting
+class_names = [id2label[i] for i in range(len(id2label))]
+
+print("\nConfusion Matrix:")
+# Pretty print using pandas if available
+try:
+    import pandas as pd
+    cm_df = pd.DataFrame(cm, index=class_names, columns=class_names)
+    print(cm_df)
+except ImportError:
+    print("(Install pandas for a prettier confusion matrix)")
+    print(cm)
 
 
 # ────────────────────────────────────────────────────────────────────────────────

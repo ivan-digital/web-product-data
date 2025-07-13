@@ -4,3 +4,9 @@ qwen3_lora_prodcat
 *.tsv
 *.gz
 *.json
+.idea
+poetry.lock
+/.venv
+qwen3_lora_prodcat_adam
+*.txt
+brand_dataset
