@@ -5,7 +5,7 @@ Fine-tuned language models for product title classification using the Large-Scal
 ## Project Structure
 
 ```
-semantic-embeddings/
+web-product-data/
 ├── category_classification/           # Product title classification components
 │   ├── build_lspc_dataset.py         # Dataset preparation script
 │   ├── train_qwen3_lora.py           # Main training script
