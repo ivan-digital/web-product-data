@@ -1,0 +1,51 @@
+Learnign Rate = 1e-5 paged_adamw_8bit,  lora_r=16, lora_alpha=32, dropout 0.2, warmup_ratio=1, max_grad_norm=1
+Validation: {'eval_loss': 0.828125, 'eval_macro_f1': 0.6927696492696397, 'eval_micro_f1': 0.732140453030864, 'eval_accuracy': 0.732140453030864, 'eval_runtime': 2980.5456, 'eval_samples_per_second': 159.493, 'eval_steps_per_second': 4.984, 'epoch': 1.0}
+Test: {'eval_loss': 0.828125, 'eval_macro_f1': 0.6926993896834875, 'eval_micro_f1': 0.7316905667985585, 'eval_accuracy': 0.7316905667985585, 'eval_runtime': 5907.2522, 'eval_samples_per_second': 161.208, 'eval_steps_per_second': 5.038, 'epoch': 1.0} 
+
+Learning Rate = 5e-5 paged_adamw_8bit,  lora_r=16, lora_alpha=32, dropout 0.2, warmup_ratio=1, max_grad_norm=1
+Validation: {'eval_loss': 0.52197265625, 'eval_macro_f1': 0.7964919095701714, 'eval_micro_f1': 0.8361991350005049, 'eval_accuracy': 0.8361991350005049, 'eval_runtime': 2941.7093, 'eval_samples_per_second': 161.599, 'eval_steps_per_second': 5.05, 'epoch': 1.0}
+Test: {'eval_loss': 0.52490234375, 'eval_macro_f1': 0.7945332089554308, 'eval_micro_f1': 0.8347583104412913, 'eval_accuracy': 0.8347583104412913, 'eval_runtime': 5896.731, 'eval_samples_per_second': 161.496, 'eval_steps_per_second': 5.047, 'epoch': 1.0}
+
+Learning Rate = 5e-5 adam,  lora_r=16, lora_alpha=32, dropout 0.2, warmup_ratio=1,  max_grad_norm=1
+Validation: {'eval_loss': 0.3914947211742401, 'eval_macro_f1': 0.8368037590167047, 'eval_micro_f1': 0.8791398808522096, 'eval_accuracy': 0.8791398808522096, 'eval_runtime': 1891.0065, 'eval_samples_per_second': 251.388, 'eval_steps_per_second': 31.423, 'epoch': 1.0}
+Test: {'eval_loss': 0.3917594254016876, 'eval_macro_f1': 0.8358954359227536, 'eval_micro_f1': 0.879017658375127, 'eval_accuracy': 0.879017658375127, 'eval_runtime': 3797.5226, 'eval_samples_per_second': 250.768, 'eval_steps_per_second': 31.346, 'epoch': 1.0}
+
+0: Automotive
+1: Baby
+2: Books
+3: Clothing
+4: Jewelry
+5: Shoes
+
+       0      1      2       3       4      5
+0  96086    878   1203    4042    3260   1070
+1   2093  24490   1126   13880    1642   1086
+2   1679    972  86537    6906    2209    672
+3   3416   4449   6063  412904    8187   6861
+4   5703    931   2082   11560  134570   1513
+5   2218    745   1156   15298    2311  82498
+
+Learning Rate = 5e-5 adamw_bnb_8bit, lora_r=32, lora_alpha=64, dropout 0.05, warmup_ratio=0.05, max_grad_norm=0.5
+Validation: {'eval_loss': 0.3917315602302551, 'eval_macro_f1': 0.8366480472974193, 'eval_micro_f1': 0.8789274174548147, 'eval_accuracy': 0.8789274174548147, 'eval_runtime': 4786.7059, 'eval_samples_per_second': 99.312, 'eval_steps_per_second': 24.828, 'epoch': 1.0}
+Test: {'eval_loss': 0.3919655382633209, 'eval_macro_f1': 0.835856382381493, 'eval_micro_f1': 0.878949402286684, 'eval_accuracy': 0.878949402286684, 'eval_runtime': 9628.2864, 'eval_samples_per_second': 98.906, 'eval_steps_per_second': 24.727, 'epoch': 1.0}
+
+       0      1      2       3       4      5
+0  96069    882   1216    4024    3270   1078
+1   2089  24507   1129   13870    1650   1072
+2   1675    971  86508    6923    2211    687
+3   3383   4429   6063  412889    8243   6873
+4   5732    918   2072   11544  134561   1532
+5   2214    748   1162   15286    2330  82486
+
+# adafactor
+Validation: {'eval_loss': 0.39157634973526, 'eval_macro_f1': 0.8368438644265157, 'eval_micro_f1': 0.8790914980983474, 'eval_accuracy': 0.8790914980983474, 'eval_runtime': 4815.9676, 'eval_samples_per_second': 98.708, 'eval_steps_per_second': 24.677, 'epoch': 1.0}
+Test: {'eval_loss': 0.39192795753479004, 'eval_macro_f1': 0.836032384713593, 'eval_micro_f1': 0.8790932651192487, 'eval_accuracy': 0.8790932651192487, 'eval_runtime': 9657.5457, 'eval_samples_per_second': 98.606, 'eval_steps_per_second': 24.652, 'epoch': 1.0}
+
+Confusion Matrix:
+       0      1      2       3       4      5
+0  96026    889   1211    4069    3269   1075
+1   2082  24515   1120   13880    1641   1079
+2   1661    968  86511    6935    2216    684
+3   3335   4430   6035  413006    8201   6873
+4   5667    930   2063   11573  134599   1527
+5   2212    752   1155   15309    2298  82500
