@@ -44,12 +44,12 @@ def infer_device_dtype() -> tuple[torch.device, torch.dtype]:
 
 # ────────────────────────────────────────────────────────────────────────────────
 ap = argparse.ArgumentParser()
-ap.add_argument("--model_name_or_path", type=str, default="qwen/qwen2-0.5b")
-ap.add_argument("--dataset_name", type=str, default="./lspc_dataset")
+ap.add_argument("--model_name_or_path", type=str, default="Qwen/Qwen3-Embedding-0.6B")
+ap.add_argument("--dataset_name", type=str, default="./category_classification/lspc_dataset")
 ap.add_argument("--output_dir", type=str, default="./qwen3_lora_prodcat_adam")
 ap.add_argument("--num_train_epochs", type=int, default=1)
-ap.add_argument("--per_device_train_batch_size", type=int, default=4)
-ap.add_argument("--gradient_accumulation_steps", type=int, default=8)
+ap.add_argument("--per_device_train_batch_size", type=int, default=16)  # Back to original
+ap.add_argument("--gradient_accumulation_steps", type=int, default=32)  # Back to original
 ap.add_argument("--learning_rate", type=float, default=5e-5)
 ap.add_argument("--lora_r", type=int, default=32)
 ap.add_argument("--lora_alpha", type=int, default=64)
@@ -70,6 +70,12 @@ is_cuda = device.type == "cuda"
 is_mps  = device.type == "mps"
 
 print(f"🖥️  Running on: {device} (training dtype: {dtype})")
+
+# GPU stability settings (minimal impact)
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True  # Enable for speed
+    # Keep deterministic False for speed, enable sync only if needed
+    # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Only enable if you get errors
 
 if is_mps:
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -174,7 +180,7 @@ training_args = TrainingArguments(
     output_dir=args.output_dir,
     num_train_epochs=args.num_train_epochs,
     per_device_train_batch_size=args.per_device_train_batch_size,
-    per_device_eval_batch_size=args.per_device_train_batch_size,
+    per_device_eval_batch_size=8,  # Reasonable eval batch size
     gradient_accumulation_steps=args.gradient_accumulation_steps,
     fp16=args.fp16,
     bf16=False,
@@ -189,10 +195,12 @@ training_args = TrainingArguments(
     eval_strategy="epoch",
     load_best_model_at_end=True,
     metric_for_best_model="macro_f1",
-    gradient_checkpointing=True,
+    gradient_checkpointing=True,  # Re-enable for memory efficiency
     report_to="none",
     seed=args.seed,
     fp16_full_eval=args.fp16,
+    dataloader_pin_memory=False,  # Reduce memory usage
+    eval_accumulation_steps=1,    # Process eval in smaller chunks
 )
 data_collator = DataCollatorWithPadding(tokenizer=tok)
 trainer = Trainer(
@@ -205,10 +213,22 @@ trainer = Trainer(
     callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
 )
 trainer.train()
+
+# Clear cache before evaluation to free up memory
+torch.cuda.empty_cache()
+
+# Evaluate with smaller batch size to prevent OOM
+print("Running final evaluation...")
 val_metrics = trainer.evaluate(ds_tok["validation"])
 print("Validation:", val_metrics)
+
+torch.cuda.empty_cache()  # Clear cache again
+
 test_metrics = trainer.evaluate(ds_tok["test"])
 print("Test:", test_metrics)
+
+torch.cuda.empty_cache()  # Clear cache before predictions
+
 print("\nCalculating Confusion Matrix for Test Set...")
 predictions = trainer.predict(ds_tok["test"])
 y_pred = np.argmax(predictions.predictions, axis=1)
