@@ -35,6 +35,13 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from datasets import load_from_disk, Dataset
 from tqdm.auto import tqdm
 
+# Also suppress HuggingFace transformers warnings
+import logging
+logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
+import os
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
 # ────────────────────────────────────────────────────────────────────────────────
 
 def infer_device_dtype() -> tuple[torch.device, torch.dtype]:
@@ -104,8 +111,16 @@ def main():
     if model.config.pad_token_id is None:
         model.config.pad_token_id = tok.pad_token_id
 
-    model.to(device)
+    model.to(device, dtype=dtype)
     model.eval()
+
+    # Report model parameters and precision
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    param_dtype = next(model.parameters()).dtype
+    print(f"🔢 Model parameters: {total_params:,} total, {trainable_params:,} trainable")
+    print(f"🎯 Parameter precision: {param_dtype}")
+    print(f"📦 Batch size: {args.batch}")
 
     # Load products
     products = load_products(args)
