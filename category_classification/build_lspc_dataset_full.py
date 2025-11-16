@@ -13,7 +13,12 @@ Example:
 from __future__ import annotations
 
 import argparse
+import gzip
+import io
+import json
+import multiprocessing as mp
 import pathlib
+import zipfile
 
 # Allow running as a script from this directory or project root
 import os
@@ -30,8 +35,8 @@ from category_classification.build_lspc_dataset import (
     load_mapping,
     materialise,
     print_stats,
-    LANG_DETECTOR,
 )
+from category_classification.language_detection import annotate_dataset, ensure_language_detector
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,20 +56,67 @@ def parse_args() -> argparse.Namespace:
                    help="If set, only save the full split (no train/val/test)")
     p.add_argument("--add_language", action="store_true",
                    help="Annotate each record with a detected language code")
+    p.add_argument("--language_num_proc", type=int, default=None,
+                   help="Worker processes for language detection (default: half of CPU cores)")
+    p.add_argument("--read_workers", type=int, default=1,
+                   help="Number of worker processes for scanning JSON files (default: 1)")
     return p.parse_args()
+
+
+def _process_member(args):
+    zip_path, member, cluster2cat = args
+    items = []
+    with zipfile.ZipFile(zip_path) as z:
+        with z.open(member) as raw, gzip.GzipFile(fileobj=raw) as gz, \
+                io.TextIOWrapper(gz, encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                rec = json.loads(line)
+                cat = cluster2cat.get(rec.get("cluster_id"))
+                if not cat:
+                    continue
+                text = " ".join(filter(None, (
+                    rec.get("title") or rec.get("name"),
+                    rec.get("description") or ""
+                )))
+                if text.strip():
+                    items.append({
+                        "text": text,
+                        "label": cat,
+                        "cluster": int(rec["cluster_id"]),
+                    })
+    return items
+
+
+def parallel_json_stream(zip_path: pathlib.Path,
+                         cluster2cat: dict[int, str],
+                         workers: int):
+    with zipfile.ZipFile(zip_path) as z:
+        members = [m for m in z.namelist() if m.endswith(".json.gz")]
+    args_iter = ((zip_path, member, cluster2cat) for member in members)
+    with mp.Pool(processes=workers) as pool:
+        for batch in pool.imap_unordered(_process_member, args_iter, chunksize=1):
+            for record in batch:
+                yield record
 
 
 def main() -> None:
     args = parse_args()
-    if args.add_language and not LANG_DETECTOR:
-        print("⚠️  Language detector not available; language column will be 'unk'.")
+    if args.add_language:
+        print("⚙️  Language detection enabled (fasttext preferred).")
     cluster2cat = load_mapping(args.map)
     labels = sorted(set(cluster2cat.values()))
     print(f"✔ found {len(labels)} categories in mapping file")
 
-    bar_opts = dict(dynamic_ncols=True, leave=False, position=0)
-    stream = json_stream(args.zip, cluster2cat, bar_opts, args.add_language)
-    ds_full = materialise(stream, labels, args.add_language)
+    if args.read_workers and args.read_workers > 1:
+        stream = parallel_json_stream(args.zip, cluster2cat, args.read_workers)
+        ds_full = materialise(stream, labels, False)
+    else:
+        bar_opts = dict(dynamic_ncols=True, leave=False, position=0)
+        stream = json_stream(args.zip, cluster2cat, bar_opts, False)
+        ds_full = materialise(stream, labels, False)
+    if args.add_language:
+        ensure_language_detector()
+        ds_full = annotate_dataset(ds_full, num_proc=args.language_num_proc)
     print(f"✔ corpus materialised: {len(ds_full):,} records")
 
     ds_entries: dict[str, object] = {args.full_split_name: ds_full}

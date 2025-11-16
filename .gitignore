@@ -1,4 +1,5 @@
 lspc_dataset
+lspc_dataset_full
 qwen3_lora_prodcat
 *.zip
 *.tsv

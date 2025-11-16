@@ -48,7 +48,7 @@ try:
         except Exception:
             return "unk"
 except ModuleNotFoundError:                                   # fallback → langdetect
-    log.info("fasttext‑langdetect not installed – using langdetect")
+    log.debug("fasttext-langdetect not installed – using langdetect")
     from langdetect import detect as slow_detect              # type: ignore
 
     def autodetect(text: str) -> str:

@@ -40,7 +40,7 @@ The task classifies product titles into 6 main categories based on web product d
 python category_classification/build_lspc_dataset.py --zip lspcV2020.zip --out lspc_dataset
 # Or include a `full` split:
 python category_classification/build_lspc_dataset_full.py --zip lspcV2020.zip --out lspc_dataset_full
-# Append --add_language to annotate records with detected language codes (requires ftlangdetect or langdetect)
+# Append --add_language (with optional --language_num_proc and --read_workers) to annotate records with detected language codes and speed up scanning.
 ```
 
 2. **Train Model:**
