@@ -9,3 +9,6 @@ poetry.lock
 /.venv
 qwen3_lora_prodcat_adam
 brand_dataset
+__pycache__/
+*.pyc
+/embedding_classifier_prodcat/

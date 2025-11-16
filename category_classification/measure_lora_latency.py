@@ -132,7 +132,7 @@ def main():
         for i in range(0, len(seq), batch_size):
             yield seq[i : i + batch_size]
 
-    latencies = []  # seconds per item
+    latencies = []
 
     # Warm-up
     if args.warmup_batches > 0:

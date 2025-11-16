@@ -43,6 +43,9 @@ from sklearn.model_selection import GroupShuffleSplit
 
 disable_progress_bar()  # keep HF quiet
 
+from webdata_discovery import autodetect as detect_language  # type: ignore
+LANG_DETECTOR = "autodetect"
+
 # ----------------------------- CLI ----------------------------- #
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -55,6 +58,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--val_size",  type=float, default=0.05, help="Fraction for validation set")
     p.add_argument("--test_size", type=float, default=0.10, help="Fraction for test set")
     p.add_argument("--seed",      type=int,   default=42,   help="Random seed")
+    p.add_argument("--add_language", action="store_true",
+                   help="Annotate each record with a detected language code")
     return p.parse_args()
 
 # --------------------------- Helpers --------------------------- #
@@ -70,7 +75,8 @@ def load_mapping(path: pathlib.Path) -> Dict[int, str]:
 
 def json_stream(zip_path: pathlib.Path,
                 cluster2cat: Dict[int, str],
-                bar_opts: dict) -> Iterable[dict]:
+                bar_opts: dict,
+                add_language: bool) -> Iterable[dict]:
     """Yield cleaned records one by one from the ZIP archive."""
     with zipfile.ZipFile(zip_path) as z:
         members = [m for m in z.namelist() if m.endswith(".json.gz")]
@@ -87,18 +93,24 @@ def json_stream(zip_path: pathlib.Path,
                         rec.get("description") or ""
                     )))
                     if text.strip():
-                        yield {"text": text,
-                               "label": cat,
-                               "cluster": int(rec["cluster_id"])}
+                        item = {"text": text,
+                                "label": cat,
+                                "cluster": int(rec["cluster_id"])}
+                        if add_language:
+                            item["language"] = detect_language(text) if LANG_DETECTOR else "unk"
+                        yield item
 
 def materialise(stream: Iterable[dict],
-                labels: List[str]) -> Dataset:
+                labels: List[str],
+                add_language: bool) -> Dataset:
     """Turn an iterable of dicts into an in‑memory HF Dataset."""
     feats = Features({
         "text":    Value("string"),
         "label":   ClassLabel(names=labels),
         "cluster": Value("int32"),
     })
+    if add_language:
+        feats["language"] = Value("string")
     # Since we don’t know the total length in advance, collect into shards
     shard, shards = [], []
     for rec in stream:
@@ -132,16 +144,23 @@ def grouped_split(ds: Dataset,
     ds_val   = ds_train_val.select(val_idx)
     return ds_train, ds_val, ds_test
 
-def print_stats(split: str, ds: Dataset):
+def print_stats(split: str, ds: Dataset, add_language: bool):
     cnt = Counter(ds["label"])
     n   = len(ds)
     top = ", ".join(f"{l}:{c}" for l, c in cnt.most_common(5))
-    print(f"{split:>9}  {n:>7,} samples   • top5: {top}")
+    lang_info = ""
+    if add_language and "language" in ds.column_names:
+        lang_cnt = Counter(ds["language"])
+        lang_top = ", ".join(f"{l}:{c}" for l, c in lang_cnt.most_common(5))
+        lang_info = f" • lang_top5: {lang_top}"
+    print(f"{split:>9}  {n:>7,} samples   • top5: {top}{lang_info}")
 
 # ----------------------------- main ---------------------------- #
 def main() -> None:
     args = parse_args()
     random.seed(args.seed)
+    if args.add_language and not LANG_DETECTOR:
+        print("⚠️  Language detector not available; language column will be 'unk'.")
 
     # ---- load mapping & labels ---- #
     cluster2cat = load_mapping(args.map)
@@ -150,8 +169,8 @@ def main() -> None:
 
     # ---- stream raw corpus ---- #
     bar_opts = dict(dynamic_ncols=True, leave=False, position=0)
-    stream   = json_stream(args.zip, cluster2cat, bar_opts)
-    ds_full  = materialise(stream, labels)
+    stream   = json_stream(args.zip, cluster2cat, bar_opts, args.add_language)
+    ds_full  = materialise(stream, labels, args.add_language)
     print(f"✔ corpus materialised: {len(ds_full):,} records")
 
     # ---- leak‑free splits ---- #
@@ -162,7 +181,7 @@ def main() -> None:
     for name, d in [("train", train_ds),
                     ("valid", val_ds),
                     ("test",  test_ds)]:
-        print_stats(name, d)
+        print_stats(name, d, args.add_language and "language" in d.column_names)
 
     # ---- save ---- #
     dsdict = DatasetDict({"train": train_ds,
