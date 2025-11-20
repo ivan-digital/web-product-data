@@ -1,4 +1,4 @@
-# Product Title Classification based on Web Product Common Crawl subset
+﻿# Product Title Classification based on Web Product Common Crawl subset
 
 Fine-tuned language models for product title classification using the Large-Scale Product Corpus (LSPC) V2020 dataset. The project focuses on **6-class category classification** using LoRA fine-tuning of Qwen embedding models.
 
@@ -6,18 +6,21 @@ Fine-tuned language models for product title classification using the Large-Scal
 
 ```
 web-product-data/
-├── category_classification/           # Product title classification components
-│   ├── build_lspc_dataset.py         # Dataset preparation script
-│   ├── build_lspc_dataset_full.py    # Dataset with extra full split
-│   ├── train_qwen3_lora.py           # Main training script
-│   ├── train_qwen3_lora_v2.py        # Alternative training script
-│   ├── train_embedding_classifier.py # Pure PyTorch classifier trainer
-│   ├── embedding_classifier.py       # Pure PyTorch embedding encoder
-│   └── results_category.txt          # Training results and metrics
-├── docs/
-│   └── embedding_classifier_architecture.md  # Detailed model description
-├── webdata_discovery.py              # Data exploration tool
-└── pyproject.toml                    # Dependencies
+|-- category_classification/             # Product title classification components
+|   |-- build_lspc_dataset.py            # Dataset preparation script
+|   |-- build_lspc_dataset_full.py       # Dataset with extra full split
+|   |-- train_qwen3_lora.py              # Main training script
+|   |-- train_qwen3_lora_v2.py           # Alternative training script
+|   |-- train_embedding_classifier.py    # Baseline PyTorch classifier trainer
+|   |-- train_embedding_classifier_v2.py # Trainer w/ residual head + extra losses
+|   |-- embedding_classifier.py          # Baseline embedding encoder
+|   |-- embedding_classifier_v2.py       # Residual-head encoder variant
+|   |-- results_category.txt             # Training results and metrics
+|   `-- EXPERIMENT_LOG.md                # Chronological training notes
+|-- docs/
+|   `-- embedding_classifier_architecture.md  # Detailed model description
+|-- webdata_discovery.py                 # Data exploration tool
+`-- pyproject.toml                       # Dependencies
 ```
 
 ## Product Title Classification
@@ -48,7 +51,7 @@ python category_classification/build_lspc_dataset_full.py --zip lspcV2020.zip --
 python category_classification/train_qwen3_lora.py --data ./lspc_dataset --out ./qwen3_lora_prodcat --batch 128
 ```
 
-3. **Train Pure PyTorch Embedding Classifier (optional – push batch size/grad_accum to fill VRAM):**
+3. **Train Pure PyTorch Embedding Classifier (optional � push batch size/grad_accum to fill VRAM):**
 ```bash
 python category_classification/train_embedding_classifier.py \
     --data ./lspc_dataset \
@@ -57,22 +60,26 @@ python category_classification/train_embedding_classifier.py \
 
 ### Best Results
 
-**Test Performance:**
-- **Macro F1**: 0.8360 (83.60%)
-- **Accuracy**: 0.8791 (87.91%)
+**Current best (EmbeddingClassifier baseline, full dataset):**
+- **Test macro F1**: 0.9315
+- **Test micro F1 / accuracy**: 0.9487
+- **Per-language (test macro F1)**: en 0.946, de 0.753, fr 0.809, es 0.783, ja 0.830
 
-**Best Configuration:**
-- Optimizer: adamw_torch  
-- Learning Rate: 5e-5
-- LoRA: r=16, alpha=32
-- Epochs: 1
+**Notable config for the best run:**
+- Script: `category_classification/train_embedding_classifier.py`
+- Checkpoint: `embedding_classifier_prodcat/checkpoint-epoch5.pt`
+- Batch size 254, grad_accum 2, cosine LR (warmup 3000, min_scale 0.05), AMP enabled
+
+**Historical LoRA (Qwen) reference:**
+- Qwen LoRA (r=16, alpha=32, LR 5e-5, 1 epoch): test macro F1 0.8360, accuracy 0.8791.
+
 
 ### Pure PyTorch Embedding Classifier
 
 `category_classification/embedding_classifier.py` contains a compact, encoder-only
 (bidirectional self-attention) architecture implemented directly with PyTorch,
 so tokens can attend left/right (no causal mask).  Instantiate it with the
-tokenizer’s vocab size and your target label count:
+tokenizer�s vocab size and your target label count:
 
 ```python
 from category_classification.embedding_classifier import (
@@ -123,8 +130,28 @@ enabled by default (requires `ftlangdetect` or `langdetect`); use
 `--no_lang_metrics` to disable them and `--lang_min_samples` / `--lang_top_k` to
 control which languages are reported. Add `--amp` to enable CUDA mixed precision
 (AMP) for larger batches and faster training. Use `--grad_accum` to keep an
-effective batch size near 1–2k tokens without running out of memory, and
+effective batch size near 1�2k tokens without running out of memory, and
 optionally set `--memory_summary_freq` for periodic allocator stats.
+
+### Enhanced Classifier Head (v2)
+
+`embedding_classifier_v2.py` reuses the backbone but swaps the classifier head
+for a residual bottleneck block with RMSNorm and configurable dropout. The
+paired trainer, `train_embedding_classifier_v2.py`, layers in label smoothing
+and focal loss to further improve macro-F1 without touching the baseline script.
+
+```bash
+python category_classification/train_embedding_classifier_v2.py \
+    --data ./lspc_dataset_full \
+    --out ./embedding_classifier_prodcat_v2 \
+    --epochs 5 --batch_size 128 --grad_accum 4 \
+    --lr_schedule cosine --lr_min_scale 0.05 \
+    --label_smoothing 0.05 --focal_gamma 1.5 --amp
+```
+
+Language metrics, checkpointing, and the cosine/exponential LR schedules behave
+exactly like the baseline trainer. Refer to `EXPERIMENT_LOG.md` for the latest
+run commands, thermal/cooling notes, and planned architectural tweaks.
 
 ### Full Corpus Split
 

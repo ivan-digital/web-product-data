@@ -16,12 +16,12 @@ authors = ["ivan.aufkl@gmail.com"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.12"
+python = ">=3.10,<3.12"
 datasets = "^2.19.0"
 transformers = "^4.53.0"
 peft = "^0.11.1"
 scikit-learn = "^1.5.0"
-torch       = { version = "2.9.1+cu121", source = "pytorch-cu130" }
+torch       = { version = "2.9.1+cu130", source = "pytorch-cu130" }
 accelerate = "^1.8.1"
 bitsandbytes = "^0.45.3" 
 tqdm = "^4.66.4"

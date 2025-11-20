@@ -13,3 +13,7 @@ brand_dataset
 __pycache__/
 *.pyc
 /embedding_classifier_prodcat/
+/embedding_classifier_prodcat_v2/
+/embedding_classifier_prodcat_v2_en/
+/embedding_classifier_prodcat_v2_gamma0/
+/embedding_classifier_prodcat_v3/

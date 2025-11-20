@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -106,6 +107,37 @@ def gpu_memory_report(device: torch.device) -> str:
     return f"alloc={allocated:.2f}GB reserved={reserved:.2f}GB peak={peak:.2f}GB"
 
 
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    schedule_type: str,
+    total_updates: int,
+    warmup_steps: int,
+    min_scale: float,
+) -> torch.optim.lr_scheduler.LRScheduler | None:
+    """Create a LambdaLR implementing cosine or exponential decay."""
+    if schedule_type == "none":
+        return None
+
+    total_updates = max(1, total_updates)
+    warmup_steps = max(0, min(warmup_steps, total_updates - 1))
+    min_scale = max(1e-5, min(min_scale, 1.0))
+
+    def lr_lambda(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return max(step / max(1, warmup_steps), 1e-8)
+        if total_updates <= warmup_steps:
+            return min_scale
+        progress = (step - warmup_steps) / max(1, total_updates - warmup_steps)
+        progress = min(max(progress, 0.0), 1.0)
+        if schedule_type == "cosine":
+            decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return min_scale + (1.0 - min_scale) * decay
+        # exponential decay towards min_scale
+        return math.exp(math.log(min_scale) * progress)
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train EmbeddingClassifier on LSPC categories")
     p.add_argument("--data", type=str, default="./lspc_dataset",
@@ -117,6 +149,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--grad_accum", type=int, default=1, help="Gradient accumulation steps")
     p.add_argument("--epochs", type=int, default=3, help="Training epochs")
     p.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    p.add_argument("--lr_schedule", choices=["none", "cosine", "exponential"], default="none",
+                   help="Learning-rate schedule (applied to optimizer steps)")
+    p.add_argument("--lr_warmup_steps", type=int, default=0,
+                   help="Linear warmup steps before decay kicks in")
+    p.add_argument("--lr_min_scale", type=float, default=0.1,
+                   help="Final LR as a fraction of --lr when using a schedule")
     p.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     p.add_argument("--dropout", type=float, default=0.1, help="Dropout probability")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -231,14 +269,22 @@ def evaluate(
 def compute_language_metrics(
     labels: np.ndarray,
     preds: np.ndarray,
-    texts: list[str],
+    texts: list[str] | None,
     min_samples: int,
     top_k: int | None,
+    languages: list[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     indices_by_lang: dict[str, list[int]] = defaultdict(list)
-    for idx, text in enumerate(texts):
-        lang = detect_language(text)
-        indices_by_lang[lang].append(idx)
+    if languages is not None:
+        for idx, lang in enumerate(languages):
+            lang_code = (lang or "unk").lower()
+            indices_by_lang[lang_code].append(idx)
+    elif texts is not None:
+        for idx, text in enumerate(texts):
+            lang = detect_language(text)
+            indices_by_lang[lang].append(idx)
+    else:
+        return {}
 
     counts = Counter({lang: len(idxs) for lang, idxs in indices_by_lang.items()})
     sorted_langs = [lang for lang, cnt in counts.most_common() if cnt >= min_samples]
@@ -280,6 +326,10 @@ def main() -> None:
 
     ds_tok = tokenize_dataset(ds, tokenizer, args.seq_len)
     loaders = build_dataloaders(ds_tok, args.batch_size)
+    steps_per_epoch = math.ceil(len(loaders["train"]) / max(1, args.grad_accum))
+    if steps_per_epoch == 0:
+        raise RuntimeError("Training dataloader is empty.")
+    total_optimizer_updates = steps_per_epoch * args.epochs
 
     lang_metrics_enabled = (not args.no_lang_metrics) and LANG_DETECTOR
     if not LANG_DETECTOR:
@@ -310,6 +360,21 @@ def main() -> None:
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
+    scheduler = build_scheduler(
+        optimizer=optimizer,
+        schedule_type=args.lr_schedule,
+        total_updates=total_optimizer_updates,
+        warmup_steps=args.lr_warmup_steps,
+        min_scale=args.lr_min_scale,
+    )
+    if scheduler:
+        print(
+            "⚙️  LR scheduler: "
+            f"{args.lr_schedule} | warmup={args.lr_warmup_steps} steps | "
+            f"min_scale={args.lr_min_scale:.4f} | total_updates={total_optimizer_updates}"
+        )
+    else:
+        print("⚙️  LR scheduler: none (constant learning rate)")
     scaler = GradScaler(device="cuda") if use_amp else None
     opt_state_peak_bytes = optimizer_state_bytes(optimizer)
     opt_state_min_bytes = opt_state_peak_bytes or float("inf")
@@ -327,6 +392,16 @@ def main() -> None:
         checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model_state"])
         optimizer.load_state_dict(checkpoint["optimizer_state"])
+        scheduler_needs_backfill = False
+        if scheduler:
+            sched_state = checkpoint.get("scheduler_state")
+            if sched_state:
+                scheduler.load_state_dict(sched_state)
+                last_lrs = scheduler.get_last_lr()
+                for group, lr in zip(optimizer.param_groups, last_lrs):
+                    group["lr"] = lr
+            else:
+                scheduler_needs_backfill = True
         best_macro_f1 = checkpoint.get("best_macro_f1", -1.0)
         global_step = checkpoint.get("global_step", 0)
         start_epoch = checkpoint["epoch"] + 1
@@ -344,6 +419,8 @@ def main() -> None:
                 cuda_rng = torch.tensor(cuda_rng, dtype=torch.uint8)
             torch.cuda.set_rng_state(cuda_rng)
         np.random.set_state(checkpoint["numpy_rng_state"])
+        if scheduler and scheduler_needs_backfill and global_step > 0:
+            scheduler.step(global_step - 1)
         print(f"➡️  Resumed from epoch {checkpoint['epoch']}, best macro-f1 {best_macro_f1:.4f}")
 
     out_dir = Path(args.out)
@@ -380,6 +457,8 @@ def main() -> None:
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
+                if scheduler:
+                    scheduler.step()
 
             if step % 5000 == 0:
                 avg_loss = total_loss / step
@@ -391,12 +470,14 @@ def main() -> None:
                     torch.cuda.synchronize(device)
                     curr_alloc = torch.cuda.memory_allocated(device)
                     gpu_min_alloc_bytes = min(gpu_min_alloc_bytes, curr_alloc)
+                curr_lr = optimizer.param_groups[0]["lr"]
                 msg = (
                     f"Epoch {epoch} | Step {step} | Loss {avg_loss:.4f} | "
                     f"weights={bytes_to_gb(model_param_bytes):.2f}GB "
                     f"opt_state={bytes_to_gb(opt_state):.2f}GB "
                     f"(min {bytes_to_gb(opt_state_min_bytes):.2f} / "
-                    f"max {bytes_to_gb(opt_state_peak_bytes):.2f})"
+                    f"max {bytes_to_gb(opt_state_peak_bytes):.2f}) "
+                    f"| lr={curr_lr:.6f}"
                 )
                 if mem_info:
                     msg += (
@@ -417,6 +498,9 @@ def main() -> None:
             else:
                 optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+            global_step += 1
+            if scheduler:
+                scheduler.step()
 
         val_eval = evaluate(
             model,
@@ -451,12 +535,19 @@ def main() -> None:
             }
             if torch.cuda.is_available():
                 ckpt["cuda_rng_state"] = torch.cuda.get_rng_state()
+            if scheduler:
+                ckpt["scheduler_state"] = scheduler.state_dict()
             ckpt_path = out_dir / f"checkpoint-epoch{epoch}.pt"
             torch.save(ckpt, ckpt_path)
             print(f"💾 Saved checkpoint: {ckpt_path}")
 
         if lang_metrics_enabled:
             lang_texts = ds["validation"]["text"]
+            lang_codes = (
+                ds["validation"]["language"]
+                if "language" in ds["validation"].column_names
+                else None
+            )
             top_k = args.lang_top_k if args.lang_top_k > 0 else None
             val_language_metrics = compute_language_metrics(
                 labels=val_labels,
@@ -464,6 +555,7 @@ def main() -> None:
                 texts=lang_texts,
                 min_samples=args.lang_min_samples,
                 top_k=top_k,
+                languages=lang_codes,
             )
             if val_language_metrics:
                 lang_path = out_dir / f"lang_metrics_validation_epoch{epoch}.json"
@@ -492,6 +584,9 @@ def main() -> None:
     if lang_metrics_enabled and test_labels is not None and test_preds is not None:
         print("🗣️  Computing language-grouped metrics...")
         lang_texts = ds["test"]["text"]
+        lang_codes = (
+            ds["test"]["language"] if "language" in ds["test"].column_names else None
+        )
         top_k = args.lang_top_k if args.lang_top_k > 0 else None
         language_metrics = compute_language_metrics(
             labels=test_labels,
@@ -499,6 +594,7 @@ def main() -> None:
             texts=lang_texts,
             min_samples=args.lang_min_samples,
             top_k=top_k,
+            languages=lang_codes,
         )
         if not language_metrics:
             print("ℹ️  No languages met the minimum sample threshold.")
