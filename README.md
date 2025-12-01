@@ -51,7 +51,7 @@ python category_classification/build_lspc_dataset_full.py --zip lspcV2020.zip --
 python category_classification/train_qwen3_lora.py --data ./lspc_dataset --out ./qwen3_lora_prodcat --batch 128
 ```
 
-3. **Train Pure PyTorch Embedding Classifier (optional � push batch size/grad_accum to fill VRAM):**
+3. **Train Pure PyTorch Embedding Classifier (optional: push batch size/grad_accum to fill VRAM):**
 ```bash
 python category_classification/train_embedding_classifier.py \
     --data ./lspc_dataset \
@@ -64,6 +64,8 @@ python category_classification/train_embedding_classifier.py \
 - **Test macro F1**: 0.9315
 - **Test micro F1 / accuracy**: 0.9487
 - **Per-language (test macro F1)**: en 0.946, de 0.753, fr 0.809, es 0.783, ja 0.830
+
+**[More details in blog post](https://blog.ivan.digital/beating-qwen3-lora-with-a-tiny-pytorch-encoder-on-the-large-scale-product-corpus-afe536de205f)**
 
 **Notable config for the best run:**
 - Script: `category_classification/train_embedding_classifier.py`
